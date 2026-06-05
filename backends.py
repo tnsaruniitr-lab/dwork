@@ -1,0 +1,131 @@
+"""
+backends.py — the pluggable "brain" for the computer-use loop.
+
+agent.py is backend-agnostic. A backend owns the model conversation and, each step,
+returns the model's text + a list of actions (in executor's schema); it then receives
+the resulting screenshots via observe().
+
+  ClaudeBackend  — Anthropic API computer-use tool (CLOUD). Implemented & default.
+  UITarsBackend  — local UI-TARS via an OpenAI-compatible endpoint (screenshots stay
+                   on your machine). STUB — fill in when you stand up UI-TARS.
+
+Switching backends never touches executor.py or safety.py.
+"""
+import time
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Action:
+    id: str
+    input: dict          # executor schema: {"action": "left_click", "coordinate": [x, y], ...}
+
+
+@dataclass
+class StepResult:
+    text: str = ""
+    actions: list = field(default_factory=list)   # empty => the model is done
+    usage: dict = field(default_factory=dict)
+
+
+@dataclass
+class Observation:
+    action_id: str
+    image_b64: str = None    # screenshot taken after the action
+    error: str = None        # set instead of image if blocked / failed
+
+
+class ClaudeBackend:
+    """Anthropic computer-use tool. Pairing below is for Opus 4.8 / 4.7 / 4.6 / Sonnet 4.6."""
+    BETA = "computer-use-2025-11-24"
+    TOOL_TYPE = "computer_20251124"
+
+    def __init__(self, model, system_prompt, display_w, display_h, thinking="adaptive", keep_images=3):
+        import anthropic
+        self._anthropic = anthropic
+        self.client = anthropic.Anthropic()      # reads ANTHROPIC_API_KEY
+        self.model = model
+        self.thinking = thinking
+        self.keep_images = keep_images
+        self.tool = {"type": self.TOOL_TYPE, "name": "computer",
+                     "display_width_px": display_w, "display_height_px": display_h, "display_number": 1}
+        # cache_control on the system block caches tools + system together (tools render first).
+        self.system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+        self.messages = []
+
+    def start(self, goal):
+        self.messages = [{"role": "user", "content": goal}]
+
+    def step(self):
+        kwargs = dict(model=self.model, max_tokens=8192, system=self.system,
+                      tools=[self.tool], betas=[self.BETA], messages=self.messages)
+        if self.thinking == "adaptive":
+            kwargs["thinking"] = {"type": "adaptive"}
+        resp = self._call(kwargs)
+        self.messages.append({"role": "assistant", "content": resp.content})
+        text = " ".join(b.text.strip() for b in resp.content if b.type == "text" and b.text.strip())
+        actions = [Action(id=b.id, input=b.input) for b in resp.content if b.type == "tool_use"]
+        u = resp.usage
+        usage = {"in": u.input_tokens, "out": u.output_tokens,
+                 "cache_read": getattr(u, "cache_read_input_tokens", 0)}
+        return StepResult(text=text, actions=actions, usage=usage)
+
+    def observe(self, observations):
+        results = []
+        for o in observations:
+            if o.error is not None:
+                results.append({"type": "tool_result", "tool_use_id": o.action_id,
+                                "content": o.error, "is_error": True})
+            else:
+                results.append({"type": "tool_result", "tool_use_id": o.action_id, "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": o.image_b64}}]})
+        self.messages.append({"role": "user", "content": results})
+        self._prune_images()
+
+    def _prune_images(self):
+        keep = self.keep_images
+        positions = []
+        for mi, msg in enumerate(self.messages):
+            if msg["role"] != "user" or not isinstance(msg.get("content"), list):
+                continue
+            for bi, block in enumerate(msg["content"]):
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    c = block.get("content")
+                    if isinstance(c, list) and c and c[0].get("type") == "image":
+                        positions.append((mi, bi))
+        for mi, bi in (positions[:-keep] if keep > 0 else positions):
+            self.messages[mi]["content"][bi]["content"] = "[older screenshot omitted to save tokens]"
+
+    def _call(self, kwargs):
+        delay = 2.0
+        for attempt in range(5):
+            try:
+                return self.client.beta.messages.create(**kwargs)
+            except (self._anthropic.RateLimitError, self._anthropic.InternalServerError,
+                    self._anthropic.APIConnectionError) as e:
+                if attempt == 4:
+                    raise
+                print(f"  [retry {attempt + 1}] {type(e).__name__}; waiting {delay:.0f}s")
+                time.sleep(delay)
+                delay *= 2
+
+
+class UITarsBackend:
+    """Local UI-TARS over an OpenAI-compatible endpoint — screenshots NEVER leave the box.
+
+    STUB / seam. Same Action / StepResult / Observation contract as ClaudeBackend, so
+    agent.py, executor.py and safety.py stay unchanged. To complete it:
+      1. Point an OpenAI client at your UI-TARS server  (base_url=UITARS_BASE_URL).
+      2. start():   seed the UI-TARS system/instruction prompt + the goal.
+      3. step():    send the latest screenshot + short history; UI-TARS replies in ITS
+                    action grammar (e.g. click(start_box='(x,y)'), type(content='...'),
+                    hotkey, scroll, wait, finished()). Parse those into executor schema:
+                      {"action":"left_click","coordinate":[x,y]} / {"action":"type","text":...}
+                    NB: UI-TARS coords are usually normalised 0-1000 -> scale to display_w/h.
+      4. observe(): append the returned screenshot(s) as the next user image.
+    """
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "UI-TARS backend is a documented stub. Stand up a UI-TARS OpenAI-compatible "
+            "endpoint, then implement start/step/observe (see this docstring + README). "
+            "Until then use CU_BACKEND=claude.")

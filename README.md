@@ -54,6 +54,13 @@ python3 agent.py "Open a new tab and search Google for the weather in Berlin."
 ```
 Run on a single display at default scaling for the cleanest first run.
 
+## Pluggable brain (cloud Claude ↔ local UI-TARS)
+`CU_BACKEND` selects what decides the actions; the loop, `executor.py`, and `safety.py` are unchanged either way.
+- **`claude`** (default) — Anthropic computer-use tool. **Screenshots go to Anthropic's cloud.** Fine for dummy data; use **Bedrock-EU + DPA** for patient data.
+- **`uitars`** — a local **UI-TARS** model over an OpenAI-compatible endpoint. **Screenshots stay on your machine.** This is a documented **stub** in `backends.py`; wire it up once you stand up a UI-TARS server (needs a GPU).
+
+There is **no local *Claude*** — Claude always runs in the cloud. True on-device inference (nothing leaves the box) means **UI-TARS, not Claude**.
+
 ## Key facts baked in
 - Tool `computer_20251124` + beta header `computer-use-2025-11-24` — the pairing for **Opus 4.8 / 4.7 / 4.6 / Sonnet 4.6 / Opus 4.5**. (For Sonnet 4.5 / Haiku 4.5 / Opus 4.1, switch both to the `...2025-01-24` variants in `agent.py`.)
 - Model defaults to `claude-opus-4-8`. **Sonnet 4.6 is a cheaper swap** for this high-volume loop and uses the *same* tool/beta — just set `CU_MODEL=claude-sonnet-4-6`.
