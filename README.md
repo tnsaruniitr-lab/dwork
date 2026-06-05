@@ -1,0 +1,64 @@
+# dwork — Claude computer-use harness (Windows)
+
+A small, safety-gated agent that drives a Windows desktop app with **Claude's computer-use
+tool**: it screenshots the screen, asks Claude for the next mouse/keyboard action, executes it,
+screenshots again, and loops until the task is done.
+
+Built to validate the loop on **Notepad** first, then point the same harness at **nCara**.
+
+```
+goal ─► Claude (computer tool) ─► action ─► executor (real click/type) ─► screenshot ─► … ─► done
+                                    ▲                                                   │
+                                    └──────────────── safety gate ◄─────────────────────┘
+```
+
+Claude only *proposes* actions — `safety.py` decides and `executor.py` acts. Nothing runs
+unless your code runs it.
+
+## Files
+- `agent.py` — the loop: Claude call, tool_use → execute → tool_result, prompt caching, image pruning, retries.
+- `executor.py` — screen capture + **coordinate scaling** + action execution (pyautogui), Windows DPI-aware, clipboard-paste typing for Unicode.
+- `safety.py` — scope-lock (act only when the right window is foreground), dryrun/confirm/auto modes, JSONL audit log.
+- `.env.example` — config. Copy to `.env`.
+
+## Setup (on the Windows box)
+```bat
+python -m venv .venv && .venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+```
+Edit `.env`: set `ANTHROPIC_API_KEY`, keep `CU_MODE=confirm` and `CU_ALLOWED_WINDOW=Notepad` for the first run.
+
+## Run the Notepad test
+1. Put a `notes.txt` with a couple of sentences on the Desktop and **open it in Notepad**.
+2. With Notepad focused:
+   ```bat
+   python agent.py "Read the contents of the open Notepad file and tell me exactly what it says."
+   ```
+3. In `confirm` mode it prints each planned action and waits for `y`. Watch it work.
+
+Tip: start in `CU_MODE=dryrun` to see the plan with **zero** execution, then switch to `confirm`, then `auto`.
+
+## Key facts baked in
+- Tool `computer_20251124` + beta header `computer-use-2025-11-24` — the pairing for **Opus 4.8 / 4.7 / 4.6 / Sonnet 4.6 / Opus 4.5**. (For Sonnet 4.5 / Haiku 4.5 / Opus 4.1, switch both to the `...2025-01-24` variants in `agent.py`.)
+- Model defaults to `claude-opus-4-8`. **Sonnet 4.6 is a cheaper swap** for this high-volume loop and uses the *same* tool/beta — just set `CU_MODEL=claude-sonnet-4-6`.
+- **Coordinate scaling** (the #1 thing that breaks these): we downscale the screenshot to `CU_MAX_WIDTH` (≤1280), declare *those* dims to the model, and scale the model's coordinates back to real pixels. Declared dims must match the image sent — they do, by construction.
+- **Prompt caching** on system + tool defs (stable prefix) via `cache_control`.
+- **Token control**: only the last `CU_KEEP_IMAGES` screenshots are kept in full; older ones are pruned to a text stub.
+
+## Safety
+- `CU_MODE`: `dryrun` (no execution) · `confirm` (y/N each action) · `auto`.
+- **Scope-lock**: actions are refused unless the foreground window title contains `CU_ALLOWED_WINDOW`. Screenshots are always allowed (read-only).
+- **Kill-switch**: slam the mouse into any screen corner (pyautogui FAILSAFE) to abort instantly.
+- The harness only references navigation/click/type actions — there is no code path that does anything destructive on its own; an unrecognized action is refused, not improvised.
+
+## Gotchas (already handled, noted so you know)
+- **DPI**: `executor.py` sets per-monitor DPI awareness so coordinates are physical pixels. Run the display at 100% scaling for the cleanest first run.
+- **German Unicode** (ä/ö/ü/ß): `type` uses clipboard-paste, not keystroke typing, which pyautogui mangles.
+- **Single monitor** recommended for the MVP (multi-monitor offsets are handled but untested).
+
+## nCara later (patient data → GDPR)
+Point it at nCara by setting `CU_ALLOWED_WINDOW=nCara` and giving a goal. **But**: every
+screenshot then contains patient data and is sent to the model. For that, run Claude via
+**AWS Bedrock (Frankfurt) under a DPA + zero-retention**, not the default direct API. Until
+then, only test against dummy data (Notepad).

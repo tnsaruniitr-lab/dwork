@@ -1,0 +1,181 @@
+"""
+executor.py — turns Claude computer-tool actions into real Windows input.
+
+Owns the ONE thing that breaks computer-use harnesses: coordinate scaling.
+We capture the real screen, downscale it to <= CU_MAX_WIDTH, declare THOSE
+dimensions to the model, and scale the model's returned coordinates back up to
+real pixels before clicking. Get this wrong and every click lands offset.
+"""
+import base64
+import io
+import platform
+import time
+
+import mss
+from PIL import Image
+import pyautogui
+import pyperclip
+
+# kill-switch: slam the mouse into a screen corner to abort; small pause between actions
+pyautogui.FAILSAFE = True
+pyautogui.PAUSE = 0.05
+
+# On Windows, become DPI-aware so pyautogui/mss coordinates are true physical pixels.
+if platform.system() == "Windows":
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor-v2
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+# Claude emits xdotool-style key names; map the common ones to pyautogui.
+_KEYMAP = {
+    "return": "enter", "kp_enter": "enter", "escape": "esc", "esc": "esc",
+    "backspace": "backspace", "delete": "delete", "tab": "tab", "space": "space",
+    "page_up": "pageup", "page_down": "pagedown", "home": "home", "end": "end",
+    "up": "up", "down": "down", "left": "left", "right": "right",
+    "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "shift": "shift",
+    "super": "win", "meta": "win", "win": "win", "cmd": "command",
+}
+
+
+def _key(name: str) -> str:
+    n = name.strip().lower()
+    if n in _KEYMAP:
+        return _KEYMAP[n]
+    return n  # letters, digits, f1..f12, etc. pass through
+
+
+def _combo(text: str):
+    return [_key(p) for p in str(text).replace(" ", "").split("+") if p]
+
+
+class Executor:
+    """Screen capture + scaling + action execution for one monitor."""
+
+    def __init__(self, max_width: int = 1280, monitor_index: int = 1, post_action_delay: float = 0.4):
+        self.post_action_delay = post_action_delay
+        with mss.mss() as sct:
+            mon = sct.monitors[monitor_index]            # 1 = primary
+        self.mon = mon
+        self.real_w, self.real_h = mon["width"], mon["height"]
+        self.scale = min(1.0, max_width / self.real_w)   # downscale factor (<=1)
+        self.display_w = round(self.real_w * self.scale) # what we DECLARE to the model
+        self.display_h = round(self.real_h * self.scale)
+
+    # ---- coordinate mapping (declared/model space -> real pixels) ----
+    def _to_real(self, coord):
+        x, y = coord
+        rx = self.mon["left"] + round(x / self.scale)
+        ry = self.mon["top"] + round(y / self.scale)
+        return rx, ry
+
+    # ---- capture: returns (base64 png, width, height) at declared dims ----
+    def screenshot(self):
+        with mss.mss() as sct:
+            raw = sct.grab(self.mon)
+        img = Image.frombytes("RGB", raw.size, raw.rgb)
+        if self.scale < 1.0:
+            img = img.resize((self.display_w, self.display_h), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.standard_b64encode(buf.getvalue()).decode("ascii"), self.display_w, self.display_h
+
+    # ---- run one action, then return a fresh screenshot ----
+    def run(self, action: dict):
+        a = (action.get("action") or "").lower()
+        if a != "screenshot":
+            self._act(a, action)
+            time.sleep(self.post_action_delay)
+        return self.screenshot()
+
+    def _act(self, a: str, action: dict):
+        coord = action.get("coordinate")
+        text = action.get("text")
+        mods = _combo(text) if (text and a in (
+            "left_click", "right_click", "middle_click", "double_click", "triple_click", "scroll")) else []
+
+        if a == "mouse_move":
+            pyautogui.moveTo(*self._to_real(coord))
+
+        elif a in ("left_click", "right_click", "middle_click", "double_click", "triple_click"):
+            if coord:
+                pyautogui.moveTo(*self._to_real(coord))
+            button = "right" if a == "right_click" else "middle" if a == "middle_click" else "left"
+            clicks = 2 if a == "double_click" else 3 if a == "triple_click" else 1
+            if mods:
+                for m in mods:
+                    pyautogui.keyDown(m)
+            try:
+                pyautogui.click(button=button, clicks=clicks, interval=0.05)
+            finally:
+                for m in reversed(mods):
+                    pyautogui.keyUp(m)
+
+        elif a == "left_click_drag":
+            start = action.get("start_coordinate")
+            if start:
+                pyautogui.moveTo(*self._to_real(start))
+            pyautogui.dragTo(*self._to_real(coord), duration=0.3, button="left")
+
+        elif a == "left_mouse_down":
+            if coord:
+                pyautogui.moveTo(*self._to_real(coord))
+            pyautogui.mouseDown(button="left")
+
+        elif a == "left_mouse_up":
+            if coord:
+                pyautogui.moveTo(*self._to_real(coord))
+            pyautogui.mouseUp(button="left")
+
+        elif a == "type":
+            # clipboard-paste = reliable Unicode (German ä/ö/ü/ß), unlike pyautogui.write
+            pyperclip.copy(str(text or ""))
+            pyautogui.hotkey("ctrl", "v")
+
+        elif a == "key":
+            keys = _combo(text)
+            if len(keys) == 1:
+                pyautogui.press(keys[0])
+            elif keys:
+                pyautogui.hotkey(*keys)
+
+        elif a == "hold_key":
+            duration = float(action.get("duration", 1.0))
+            keys = _combo(text)
+            for k in keys:
+                pyautogui.keyDown(k)
+            time.sleep(duration)
+            for k in reversed(keys):
+                pyautogui.keyUp(k)
+
+        elif a == "scroll":
+            if coord:
+                pyautogui.moveTo(*self._to_real(coord))
+            direction = (action.get("scroll_direction") or "down").lower()
+            amount = int(action.get("scroll_amount", 3))
+            if mods:
+                for m in mods:
+                    pyautogui.keyDown(m)
+            try:
+                if direction in ("up", "down"):
+                    pyautogui.scroll(amount * 100 * (1 if direction == "up" else -1))
+                else:  # left/right
+                    pyautogui.hscroll(amount * 100 * (1 if direction == "right" else -1))
+            finally:
+                for m in reversed(mods):
+                    pyautogui.keyUp(m)
+
+        elif a == "wait":
+            time.sleep(float(action.get("duration", 1.0)))
+
+        elif a == "cursor_position":
+            pass  # no-op; the returned screenshot reflects state
+
+        else:
+            # Unknown/unsupported action (e.g. a future variant) — do nothing, just re-screenshot.
+            # Never improvise a click on an action we don't understand.
+            raise ValueError(f"unsupported action: {a!r}")

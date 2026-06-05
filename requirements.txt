@@ -1,0 +1,6 @@
+anthropic        # pip install -U anthropic  (needs a recent version: computer-use beta + current models)
+pyautogui        # mouse / keyboard control
+mss              # fast screen capture
+Pillow           # image resize + encode
+pyperclip        # clipboard-paste typing (reliable Unicode, incl. German ä/ö/ü/ß)
+python-dotenv    # load .env
