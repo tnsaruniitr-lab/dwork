@@ -39,6 +39,21 @@ Edit `.env`: set `ANTHROPIC_API_KEY`, keep `CU_MODE=confirm` and `CU_ALLOWED_WIN
 
 Tip: start in `CU_MODE=dryrun` to see the plan with **zero** execution, then switch to `confirm`, then `auto`.
 
+## macOS (drive a browser)
+The same harness runs on macOS — the code auto-detects the OS and handles the Mac
+differences: **Retina coordinate scaling**, **⌘V paste**, **⌘ shortcuts**, and
+**frontmost-app scope-lock**.
+
+**Grant permissions first** (one-time): System Settings → Privacy & Security →
+- **Accessibility** → enable your terminal (Terminal / iTerm) or the Python app — needed to move/click/type
+- **Screen Recording** → same app — needed to capture screenshots
+
+Then, e.g. to drive Chrome (set `CU_ALLOWED_WINDOW=Google Chrome` in `.env`):
+```bash
+python3 agent.py "Open a new tab and search Google for the weather in Berlin."
+```
+Run on a single display at default scaling for the cleanest first run.
+
 ## Key facts baked in
 - Tool `computer_20251124` + beta header `computer-use-2025-11-24` — the pairing for **Opus 4.8 / 4.7 / 4.6 / Sonnet 4.6 / Opus 4.5**. (For Sonnet 4.5 / Haiku 4.5 / Opus 4.1, switch both to the `...2025-01-24` variants in `agent.py`.)
 - Model defaults to `claude-opus-4-8`. **Sonnet 4.6 is a cheaper swap** for this high-volume loop and uses the *same* tool/beta — just set `CU_MODEL=claude-sonnet-4-6`.

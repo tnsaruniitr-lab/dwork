@@ -11,6 +11,7 @@ Claude only PROPOSES actions; safety.py + executor.py decide and act. Patient da
 in screenshots goes to the model — for nCara, run Claude via Bedrock (Frankfurt) + DPA.
 """
 import os
+import platform
 import sys
 import time
 
@@ -35,13 +36,19 @@ THINKING = os.getenv("CU_THINKING", "adaptive").lower()
 COMPUTER_BETA = "computer-use-2025-11-24"
 COMPUTER_TOOL_TYPE = "computer_20251124"
 
+_OS = {"Darwin": "macOS", "Windows": "Windows"}.get(platform.system(), platform.system())
+_MAC_KEYS = (
+    "- On macOS use the Command (⌘) key for shortcuts — e.g. ⌘L to focus the browser "
+    "address bar, ⌘T new tab, ⌘C/⌘V copy/paste.\n" if platform.system() == "Darwin" else ""
+)
 SYSTEM_PROMPT = (
-    "You control a Windows desktop through the `computer` tool. The user gives you a goal; "
+    f"You control a {_OS} desktop through the `computer` tool. The user gives you a goal; "
     "accomplish it by taking screenshots and issuing mouse/keyboard actions.\n"
     "- Start by taking a screenshot to see the current screen.\n"
     "- After EACH action a fresh screenshot is returned. Verify the result before the next "
     "step; if a click missed or the screen isn't what you expected, correct it.\n"
-    f"- Work ONLY inside the target application (window title contains '{ALLOWED_WINDOW}'). "
+    + _MAC_KEYS +
+    f"- Work ONLY inside the target app (window/app title contains '{ALLOWED_WINDOW}'). "
     "Do not click into other apps, and never use destructive controls (delete, close-without-save).\n"
     "- Be precise with click coordinates.\n"
     "- When the goal is complete, STOP calling tools and reply with a short confirmation. "

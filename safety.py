@@ -16,8 +16,20 @@ import time
 
 
 def foreground_window_title() -> str:
-    if platform.system() != "Windows":
-        return ""  # scope-lock is a no-op off Windows (dev only)
+    sysname = platform.system()
+    if sysname == "Darwin":
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events" to get name of first application '
+                 'process whose frontmost is true'],
+                capture_output=True, text=True, timeout=3)
+            return (out.stdout or "").strip()   # e.g. "Google Chrome"
+        except Exception:
+            return ""
+    if sysname != "Windows":
+        return ""  # scope-lock no-op on other platforms
     import ctypes
     u = ctypes.windll.user32
     hwnd = u.GetForegroundWindow()

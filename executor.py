@@ -31,14 +31,18 @@ if platform.system() == "Windows":
         except Exception:
             pass
 
+_IS_MAC = platform.system() == "Darwin"
+_PASTE_MOD = "command" if _IS_MAC else "ctrl"   # ⌘V on macOS, Ctrl+V on Windows
+_SUPER = "command" if _IS_MAC else "win"        # the ⌘ / Win / Super key
+
 # Claude emits xdotool-style key names; map the common ones to pyautogui.
 _KEYMAP = {
     "return": "enter", "kp_enter": "enter", "escape": "esc", "esc": "esc",
     "backspace": "backspace", "delete": "delete", "tab": "tab", "space": "space",
     "page_up": "pageup", "page_down": "pagedown", "home": "home", "end": "end",
     "up": "up", "down": "down", "left": "left", "right": "right",
-    "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "shift": "shift",
-    "super": "win", "meta": "win", "win": "win", "cmd": "command",
+    "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option": "alt", "shift": "shift",
+    "super": _SUPER, "meta": _SUPER, "win": _SUPER, "cmd": "command", "command": "command",
 }
 
 
@@ -65,13 +69,19 @@ class Executor:
         self.scale = min(1.0, max_width / self.real_w)   # downscale factor (<=1)
         self.display_w = round(self.real_w * self.scale) # what we DECLARE to the model
         self.display_h = round(self.real_h * self.scale)
+        # macOS Retina: mss grabs PHYSICAL pixels, pyautogui clicks in LOGICAL points.
+        # logical_width / physical_width ≈ 1.0 on Windows & non-Retina, 0.5 on Retina.
+        try:
+            self.point_scale = pyautogui.size()[0] / self.real_w
+        except Exception:
+            self.point_scale = 1.0
 
     # ---- coordinate mapping (declared/model space -> real pixels) ----
     def _to_real(self, coord):
         x, y = coord
-        rx = self.mon["left"] + round(x / self.scale)
-        ry = self.mon["top"] + round(y / self.scale)
-        return rx, ry
+        rx = (self.mon["left"] + x / self.scale) * self.point_scale
+        ry = (self.mon["top"] + y / self.scale) * self.point_scale
+        return round(rx), round(ry)
 
     # ---- capture: returns (base64 png, width, height) at declared dims ----
     def screenshot(self):
@@ -134,7 +144,7 @@ class Executor:
         elif a == "type":
             # clipboard-paste = reliable Unicode (German ä/ö/ü/ß), unlike pyautogui.write
             pyperclip.copy(str(text or ""))
-            pyautogui.hotkey("ctrl", "v")
+            pyautogui.hotkey(_PASTE_MOD, "v")   # ⌘V on macOS, Ctrl+V on Windows
 
         elif a == "key":
             keys = _combo(text)
