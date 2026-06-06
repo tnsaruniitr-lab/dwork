@@ -109,15 +109,25 @@ class Executor:
         return self.screenshot()
 
     def _focus_relay(self):
-        """When driving Windows via TeamViewer, ensure TeamViewer is frontmost before clicking.
-        The browser confirm popup steals focus — this restores it silently."""
+        """When driving Windows via TeamViewer:
+        1. Bring TeamViewer app to front on Mac (fixes browser confirm stealing focus)
+        2. Click the centre of the remote session to give the Windows app focus
+           (without this, menu-bar clicks are ignored by Windows even though TeamViewer
+           receives them — the mouseover highlights but the click doesn't register)
+        """
         if not _VIA_RELAY:
             return
         import subprocess
         subprocess.run(
             ["osascript", "-e", 'tell application "TeamViewer" to activate'],
             capture_output=True, timeout=3)
-        time.sleep(0.3)   # brief settle so TeamViewer is truly front before pyautogui clicks
+        time.sleep(0.6)   # wait for TeamViewer to be truly front
+        # click the centre of the screen — neutral area that focuses the Windows session
+        # without triggering any nCara UI element
+        cx = round(self.real_w * self.point_scale / 2)
+        cy = round(self.real_h * self.point_scale / 2)
+        pyautogui.click(cx, cy)
+        time.sleep(0.4)   # let Windows process the focus click before the real click
 
     def _act(self, a: str, action: dict):
         coord = action.get("coordinate")
