@@ -8,6 +8,7 @@ real pixels before clicking. Get this wrong and every click lands offset.
 """
 import base64
 import io
+import os
 import platform
 import time
 
@@ -31,9 +32,14 @@ if platform.system() == "Windows":
         except Exception:
             pass
 
-_IS_MAC = platform.system() == "Darwin"
-_PASTE_MOD = "command" if _IS_MAC else "ctrl"   # ⌘V on macOS, Ctrl+V on Windows
-_SUPER = "command" if _IS_MAC else "win"        # the ⌘ / Win / Super key
+# Host = OS this runs on. Target = OS being controlled (differ when driving a Windows box
+# from a Mac via TeamViewer). CU_TARGET_OS: auto | windows | mac.
+_HOST_MAC = platform.system() == "Darwin"
+_T = os.getenv("CU_TARGET_OS", "auto").lower()
+_TARGET_MAC = (_T == "mac") or (_T == "auto" and _HOST_MAC)
+_VIA_RELAY = _HOST_MAC and not _TARGET_MAC      # Mac driving a Windows target (TeamViewer relay)
+_PASTE_MOD = "command" if _TARGET_MAC else "ctrl"
+_SUPER = "command" if _TARGET_MAC else "win"     # the ⌘ / Win / Super key (for the TARGET)
 
 # Claude emits xdotool-style key names; map the common ones to pyautogui.
 _KEYMAP = {
@@ -142,9 +148,14 @@ class Executor:
             pyautogui.mouseUp(button="left")
 
         elif a == "type":
-            # clipboard-paste = reliable Unicode (German ä/ö/ü/ß), unlike pyautogui.write
-            pyperclip.copy(str(text or ""))
-            pyautogui.hotkey(_PASTE_MOD, "v")   # ⌘V on macOS, Ctrl+V on Windows
+            if _VIA_RELAY:
+                # Through TeamViewer, type char-by-char (forwards reliably). ASCII only —
+                # for German text, run on the Windows box (clipboard path below).
+                pyautogui.write(str(text or ""), interval=0.03)
+            else:
+                # clipboard-paste = reliable Unicode (German ä/ö/ü/ß), unlike pyautogui.write
+                pyperclip.copy(str(text or ""))
+                pyautogui.hotkey(_PASTE_MOD, "v")
 
         elif a == "key":
             keys = _combo(text)

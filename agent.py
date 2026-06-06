@@ -30,21 +30,30 @@ MAX_STEPS = int(os.getenv("CU_MAX_STEPS", "40"))
 MAX_WIDTH = int(os.getenv("CU_MAX_WIDTH", "1280"))
 KEEP_IMAGES = int(os.getenv("CU_KEEP_IMAGES", "3"))
 THINKING = os.getenv("CU_THINKING", "adaptive").lower()
+TARGET_OS = os.getenv("CU_TARGET_OS", "auto").lower()
+ENABLE_ZOOM = os.getenv("CU_ENABLE_ZOOM", "false").lower() in ("1", "true", "yes")
 
 
 def build_system_prompt(allowed_window: str) -> str:
-    os_name = {"Darwin": "macOS", "Windows": "Windows"}.get(platform.system(), platform.system())
-    mac_keys = (
-        "- On macOS use the Command (⌘) key for shortcuts — e.g. ⌘L to focus the browser "
-        "address bar, ⌘T new tab, ⌘C/⌘V copy/paste.\n" if platform.system() == "Darwin" else ""
-    )
+    host_mac = platform.system() == "Darwin"
+    target_mac = (TARGET_OS == "mac") or (TARGET_OS == "auto" and host_mac)
+    os_name = "macOS" if target_mac else "Windows"
+    if target_mac:
+        keys = ("- On macOS use the Command (⌘) key for shortcuts — ⌘L (address bar), ⌘T (new tab), "
+                "⌘C/⌘V (copy/paste).\n")
+    else:
+        keys = ("- This is a Windows desktop: use Ctrl for shortcuts (Ctrl+C/Ctrl+V, Alt+Tab). "
+                "Prefer clicking; use the keyboard sparingly.\n")
+    relay = ("- NOTE: you're viewing this Windows desktop inside a remote-control window — the image "
+             "can be slightly compressed and updates may lag, so after each action wait for the "
+             "screenshot to refresh and verify before continuing.\n" if (host_mac and not target_mac) else "")
     return (
         f"You control a {os_name} desktop through the `computer` tool. The user gives you a goal; "
         "accomplish it by taking screenshots and issuing mouse/keyboard actions.\n"
         "- Start by taking a screenshot to see the current screen.\n"
         "- After EACH action a fresh screenshot is returned. Verify the result before the next "
         "step; if a click missed or the screen isn't what you expected, correct it.\n"
-        + mac_keys +
+        + keys + relay +
         f"- Work ONLY inside the target app (window/app title contains '{allowed_window}'). "
         "Do not click into other apps, and never use destructive controls (delete, close-without-save).\n"
         "- Be precise with click coordinates.\n"
@@ -55,7 +64,7 @@ def build_system_prompt(allowed_window: str) -> str:
 
 def make_backend(system_prompt, ex):
     if CU_BACKEND == "claude":
-        return ClaudeBackend(MODEL, system_prompt, ex.display_w, ex.display_h, THINKING, KEEP_IMAGES)
+        return ClaudeBackend(MODEL, system_prompt, ex.display_w, ex.display_h, THINKING, KEEP_IMAGES, ENABLE_ZOOM)
     if CU_BACKEND == "uitars":
         return UITarsBackend(
             base_url=os.getenv("UITARS_BASE_URL", "http://localhost:8000/v1"),
@@ -75,7 +84,7 @@ def main():
     backend = make_backend(build_system_prompt(ALLOWED_WINDOW), ex)
 
     print(f"backend={CU_BACKEND}  model={MODEL if CU_BACKEND == 'claude' else os.getenv('UITARS_MODEL')}  "
-          f"mode={MODE}  scope='{ALLOWED_WINDOW}'  "
+          f"target={TARGET_OS}  mode={MODE}  scope='{ALLOWED_WINDOW}'  zoom={ENABLE_ZOOM}  "
           f"display={ex.display_w}x{ex.display_h} (real {ex.real_w}x{ex.real_h})")
     print(f"goal: {goal}\n(kill-switch: slam the mouse into a screen corner to abort)\n")
 

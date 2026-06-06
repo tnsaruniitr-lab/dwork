@@ -54,6 +54,30 @@ python3 agent.py "Open a new tab and search Google for the weather in Berlin."
 ```
 Run on a single display at default scaling for the cleanest first run.
 
+## Phase 1 — drive a Windows box (nCara) from your Mac via TeamViewer
+Test the agent against nCara **without installing anything on the Windows box**: run dwork on your
+Mac and let it drive the **TeamViewer window** — clicks/keys/screenshots happen on the Mac and
+TeamViewer relays them to Windows. It's **vision-only** (the deterministic export macro still runs
+on Windows) and accuracy is lower through TeamViewer's compressed stream, but it's a fast way to
+prove the loop against nCara.
+
+`.env`:
+```
+CU_TARGET_OS=windows           # send Windows-style keys + relay-safe typing
+CU_ALLOWED_WINDOW=TeamViewer   # scope-lock to the TeamViewer app (macOS frontmost-app match)
+CU_MAX_WIDTH=1440              # bigger image → nCara's tiny text is more legible
+CU_MODE=confirm
+# CU_ENABLE_ZOOM=true          # optional: let Claude zoom into tiny labels
+```
+Then: full-screen the TeamViewer window (scaling = **Original / 1:1**), nCara showing; grant Terminal
+**Accessibility + Screen Recording**; run a **big-target** goal first:
+```bash
+python3 agent.py "In the nCara window, open the Controlling module and take a screenshot."
+```
+Limits: pixels only (no handle control), slower + shakier on tiny targets, **ASCII-only typing**
+through the relay (German text needs the on-box run). Patient-data screenshots still go to the
+cloud — keep Phase-1 tests on **non-patient screens**.
+
 ## Pluggable brain (cloud Claude ↔ local UI-TARS)
 `CU_BACKEND` selects what decides the actions; the loop, `executor.py`, and `safety.py` are unchanged either way.
 - **`claude`** (default) — Anthropic computer-use tool. **Screenshots go to Anthropic's cloud.** Fine for dummy data; use **Bedrock-EU + DPA** for patient data.

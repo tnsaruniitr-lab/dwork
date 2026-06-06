@@ -40,7 +40,8 @@ class ClaudeBackend:
     BETA = "computer-use-2025-11-24"
     TOOL_TYPE = "computer_20251124"
 
-    def __init__(self, model, system_prompt, display_w, display_h, thinking="adaptive", keep_images=3):
+    def __init__(self, model, system_prompt, display_w, display_h, thinking="adaptive",
+                 keep_images=3, enable_zoom=False):
         import anthropic
         self._anthropic = anthropic
         self.client = anthropic.Anthropic()      # reads ANTHROPIC_API_KEY
@@ -49,6 +50,8 @@ class ClaudeBackend:
         self.keep_images = keep_images
         self.tool = {"type": self.TOOL_TYPE, "name": "computer",
                      "display_width_px": display_w, "display_height_px": display_h, "display_number": 1}
+        if enable_zoom:
+            self.tool["enable_zoom"] = True      # Claude can zoom into tiny text (nCara labels)
         # cache_control on the system block caches tools + system together (tools render first).
         self.system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
         self.messages = []
