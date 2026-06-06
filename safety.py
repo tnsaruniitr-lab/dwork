@@ -56,8 +56,9 @@ class Safety:
 
     def allow(self, action: dict) -> bool:
         a = action.get("action", "?")
-        # screenshot, bash, open_image are always allowed past scope-lock (local / read-only)
-        if a not in ("screenshot", "bash", "open_image") and not self._in_scope():
+        # these are local/read-only — exempt from window scope-lock
+        if a not in ("screenshot", "bash", "open_image", "find_text", "wait_for_screen") \
+                and not self._in_scope():
             self.log_fn(f"  [BLOCKED] foreground app/window is not '{self.allowed_window}' — refusing {a}")
             self.record(action, "blocked-out-of-scope")
             return False

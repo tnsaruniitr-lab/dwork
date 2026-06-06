@@ -72,6 +72,43 @@ class ClaudeBackend:
                 "required": ["command"]
             }
         }
+        # find_text tool — macOS Vision OCR to locate a label on screen by text, not coordinate.
+        # Critical for nCara/TeamViewer where coordinates are fragile.
+        self.find_text_tool = {
+            "name": "find_text",
+            "description": (
+                "Find a text label on the current screen using OCR and return its pixel "
+                "coordinates for clicking. Use this instead of guessing coordinates — "
+                "works even through TeamViewer compression. "
+                "If found, returns x/y you can immediately use in a left_click computer action. "
+                "If not found, returns nearby candidate labels so you can adapt."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string",
+                              "description": "Text to find (partial match OK, case-insensitive). "
+                                             "E.g. 'Kostenträgerblatt', 'Budget Übersicht', 'Export'"}
+                },
+                "required": ["label"]
+            }
+        }
+        # wait_for_screen tool — waits until screen stops changing after a click.
+        self.wait_for_screen_tool = {
+            "name": "wait_for_screen",
+            "description": (
+                "Wait until the screen stops changing, then return a fresh screenshot. "
+                "Use after every click that opens a new screen, dialog, or triggers loading. "
+                "nCara is slow — always wait before the next click."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "timeout": {"type": "number",
+                                "description": "Max seconds to wait (default 8, max 30)"}
+                }
+            }
+        }
         # open_image tool — reads an image file from disk and returns it as pixels.
         # Eliminates the need to open Preview + screenshot + zoom just to read an image.
         self.open_image_tool = {
@@ -99,7 +136,9 @@ class ClaudeBackend:
 
     def step(self):
         kwargs = dict(model=self.model, max_tokens=8192, system=self.system,
-                      tools=[self.computer_tool, self.bash_tool, self.open_image_tool],
+                      tools=[self.computer_tool, self.bash_tool,
+                             self.find_text_tool, self.wait_for_screen_tool,
+                             self.open_image_tool],
                       betas=[self.BETA], messages=self.messages)
         if self.thinking == "adaptive":
             kwargs["thinking"] = {"type": "adaptive"}
@@ -114,6 +153,11 @@ class ClaudeBackend:
                 actions.append(Action(id=b.id, input={"action": "bash", "command": b.input.get("command", "")}))
             elif b.name == "open_image":
                 actions.append(Action(id=b.id, input={"action": "open_image", "path": b.input.get("path", "")}))
+            elif b.name == "find_text":
+                actions.append(Action(id=b.id, input={"action": "find_text", "label": b.input.get("label", "")}))
+            elif b.name == "wait_for_screen":
+                actions.append(Action(id=b.id, input={"action": "wait_for_screen",
+                                                       "timeout": b.input.get("timeout", 8)}))
             else:
                 actions.append(Action(id=b.id, input=b.input))
         u = resp.usage

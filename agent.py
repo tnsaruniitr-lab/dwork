@@ -18,6 +18,7 @@ import sys
 from dotenv import load_dotenv, dotenv_values
 
 from backends import ClaudeBackend, UITarsBackend, Observation
+import tools as _tools
 from executor import Executor
 from safety import Safety
 
@@ -56,33 +57,34 @@ def build_system_prompt(allowed_window: str) -> str:
              "can be slightly compressed and updates may lag, so after each action wait for the "
              "screenshot to refresh and verify before continuing.\n" if (host_mac and not target_mac) else "")
     return (
-        f"You control a {os_name} desktop. You have THREE tools: `bash`, `open_image`, and `computer`.\n"
+        f"You control a {os_name} desktop. You have FIVE tools — use in this priority order:\n"
         "\n"
-        "TOOL SELECTION — use in this priority order:\n"
+        "1. `bash` — whenever you know a path, folder name, or app name.\n"
+        "   - List folder (handles spaces/special chars): python3 -c \"import os; print(os.listdir('/path'))\"\n"
+        "   - Open folder: open '/exact/path'\n"
+        "   - Read text: cat '/exact/path/file.txt'\n"
         "\n"
-        "1. `bash` — use whenever you know a path, folder name, or app name.\n"
-        "   - List folder: python3 -c \"import os; print(os.listdir('/Users/x/Desktop'))\"\n"
-        "   - IMPORTANT: filenames can contain leading/trailing spaces. Always use Python\n"
-        "     os.listdir() to get exact names, then address files with the exact repr() string.\n"
-        "   - Open folder in Finder: open '/exact/path/to/folder'\n"
-        "   - Read text file: cat '/exact/path/file.txt'\n"
+        "2. `open_image` — whenever you need to READ an image file.\n"
+        "   - NEVER open in Preview and screenshot — use open_image directly.\n"
         "\n"
-        "2. `open_image` — use whenever you need to READ the contents of an image file.\n"
-        "   - NEVER open an image in Preview and screenshot it — use open_image instead.\n"
-        "   - open_image('/exact/path/image.png') returns the image directly for you to read.\n"
+        "3. `find_text` — whenever you need to CLICK a UI label by name (not coordinate).\n"
+        "   - Use for nCara sidebar items, menu items, buttons: find_text('Kostenträgerblatt')\n"
+        "   - Returns x/y pixel coordinates → immediately use in a computer left_click.\n"
+        "   - ALWAYS prefer find_text over guessing click coordinates in nCara/TeamViewer.\n"
         "\n"
-        "3. `computer` (screenshot + click) — LAST RESORT. Only use when:\n"
-        "   - The target is a button/field inside a running app UI (e.g. nCara, TeamViewer)\n"
-        "   - The task cannot be done by bash or open_image\n"
-        "   - NEVER use computer to navigate Finder or Spotlight.\n"
+        "4. `wait_for_screen` — after EVERY click that opens a screen, dialog, or triggers loading.\n"
+        "   - nCara and TeamViewer are slow — always wait before the next click.\n"
+        "   - Returns a fresh screenshot when stable.\n"
         "\n"
-        "- There may be a browser window open at localhost:5050 — IGNORE IT COMPLETELY.\n"
+        "5. `computer` (screenshot + click) — LAST RESORT only when:\n"
+        "   - find_text cannot locate the target (e.g. icon-only button, image)\n"
+        "   - NEVER use computer to navigate Finder, Spotlight, or any path-addressable target.\n"
+        "\n"
+        "- There may be a browser window at localhost:5050 — IGNORE IT COMPLETELY.\n"
         + keys + relay +
-        "- After each computer action a fresh screenshot is returned — verify before the next step.\n"
         f"- Work ONLY inside the target app (window/app title contains '{allowed_window}'). "
         "Never use destructive controls (delete, close-without-save).\n"
-        "- When the goal is complete, STOP calling tools and reply with a short confirmation. "
-        "If you were asked to read text or describe an image, include the full details."
+        "- When done, STOP and reply with a short confirmation including any text/content read."
     )
 
 
@@ -128,6 +130,10 @@ def run_session(goal, log=print, confirm_fn=None, stop_fn=None):
                 log(f"  step {step + 1}: bash: {a.get('command', '')}")
             elif action_type == "open_image":
                 log(f"  step {step + 1}: open_image: {a.get('path', '')}")
+            elif action_type == "find_text":
+                log(f"  step {step + 1}: find_text: '{a.get('label', '')}'")
+            elif action_type == "wait_for_screen":
+                log(f"  step {step + 1}: wait_for_screen ({a.get('timeout', 8)}s)")
             else:
                 log(f"  step {step + 1}: {action_type} {a.get('coordinate', '')}")
             if stop_fn and stop_fn():
@@ -151,7 +157,6 @@ def run_session(goal, log=print, confirm_fn=None, stop_fn=None):
                     from PIL import Image
                     path = a.get("path", "")
                     img = Image.open(path).convert("RGB")
-                    # downscale to max 1280px wide so it fits in context cleanly
                     max_w = 1280
                     if img.width > max_w:
                         img = img.resize((max_w, round(img.height * max_w / img.width)), Image.LANCZOS)
@@ -159,6 +164,20 @@ def run_session(goal, log=print, confirm_fn=None, stop_fn=None):
                     img.save(buf, format="PNG")
                     img_b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
                     log(f"    image loaded: {img.width}x{img.height}")
+                    observations.append(Observation(act.id, image_b64=img_b64))
+                    safety.record(a, "ok")
+                elif action_type == "find_text":
+                    label = a.get("label", "")
+                    result_dict = _tools.find_text_on_screen(label, ex.display_w, ex.display_h)
+                    import json
+                    text_out = json.dumps(result_dict)
+                    log(f"    find_text result: {text_out}")
+                    observations.append(Observation(act.id, text=text_out))
+                    safety.record(a, "ok")
+                elif action_type == "wait_for_screen":
+                    timeout = float(a.get("timeout", 8))
+                    img_b64, stable = _tools.wait_for_screen_stable(timeout, ex.display_w, ex.display_h)
+                    log(f"    screen {'stable' if stable else 'timed out'}")
                     observations.append(Observation(act.id, image_b64=img_b64))
                     safety.record(a, "ok")
                 else:
