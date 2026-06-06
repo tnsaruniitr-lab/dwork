@@ -14,13 +14,20 @@ import os
 import platform
 import sys
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
 from backends import ClaudeBackend, UITarsBackend, Observation
 from executor import Executor
 from safety import Safety
 
-load_dotenv()
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(_ENV_PATH)
+# Some host environments (e.g. the Claude app) export an EMPTY ANTHROPIC_API_KEY;
+# load_dotenv won't override a set-but-blank value. Force any .env value that's
+# missing/blank in the environment (a real, non-blank shell override still wins).
+for _k, _v in dotenv_values(_ENV_PATH).items():
+    if _v and not os.environ.get(_k):
+        os.environ[_k] = _v
 
 CU_BACKEND = os.getenv("CU_BACKEND", "claude").lower()
 MODEL = os.getenv("CU_MODEL", "claude-opus-4-8")
