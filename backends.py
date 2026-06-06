@@ -31,8 +31,9 @@ class StepResult:
 @dataclass
 class Observation:
     action_id: str
-    image_b64: str = None    # screenshot taken after the action
-    error: str = None        # set instead of image if blocked / failed
+    image_b64: str = None    # screenshot taken after a vision action
+    text: str = None         # stdout returned from a bash action
+    error: str = None        # set instead of image/text if blocked / failed
 
 
 class ClaudeBackend:
@@ -48,10 +49,33 @@ class ClaudeBackend:
         self.model = model
         self.thinking = thinking
         self.keep_images = keep_images
-        self.tool = {"type": self.TOOL_TYPE, "name": "computer",
-                     "display_width_px": display_w, "display_height_px": display_h, "display_number": 1}
+        self.computer_tool = {
+            "type": self.TOOL_TYPE, "name": "computer",
+            "display_width_px": display_w, "display_height_px": display_h, "display_number": 1
+        }
         if enable_zoom:
-            self.tool["enable_zoom"] = True      # Claude can zoom into tiny text (nCara labels)
+            self.computer_tool["enable_zoom"] = True
+        # bash tool — lets the agent run local shell commands instead of navigating by vision.
+        # Use for: open /path, ls, cat, open -a App — anything addressable directly.
+        self.bash_tool = {
+            "name": "bash",
+            "description": (
+                "Run a shell command on the local machine (macOS). "
+                "PREFER this over clicking/vision whenever you know the path or app name. "
+                "Examples: open '/Users/x/Desktop/Amend' to open a folder in Finder; "
+                "open -a Preview '/path/to/file.png' to open a file; "
+                "ls '/Users/x/Desktop/Amend' to list folder contents; "
+                "cat '/path/file.txt' to read a text file. "
+                "Return value is stdout+stderr."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to run"}
+                },
+                "required": ["command"]
+            }
+        }
         # cache_control on the system block caches tools + system together (tools render first).
         self.system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
         self.messages = []
@@ -61,13 +85,22 @@ class ClaudeBackend:
 
     def step(self):
         kwargs = dict(model=self.model, max_tokens=8192, system=self.system,
-                      tools=[self.tool], betas=[self.BETA], messages=self.messages)
+                      tools=[self.computer_tool, self.bash_tool],
+                      betas=[self.BETA], messages=self.messages)
         if self.thinking == "adaptive":
             kwargs["thinking"] = {"type": "adaptive"}
         resp = self._call(kwargs)
         self.messages.append({"role": "assistant", "content": resp.content})
         text = " ".join(b.text.strip() for b in resp.content if b.type == "text" and b.text.strip())
-        actions = [Action(id=b.id, input=b.input) for b in resp.content if b.type == "tool_use"]
+        actions = []
+        for b in resp.content:
+            if b.type != "tool_use":
+                continue
+            if b.name == "bash":
+                # wrap bash call in executor schema so agent.py can route it
+                actions.append(Action(id=b.id, input={"action": "bash", "command": b.input.get("command", "")}))
+            else:
+                actions.append(Action(id=b.id, input=b.input))
         u = resp.usage
         usage = {"in": u.input_tokens, "out": u.output_tokens,
                  "cache_read": getattr(u, "cache_read_input_tokens", 0)}
@@ -79,6 +112,10 @@ class ClaudeBackend:
             if o.error is not None:
                 results.append({"type": "tool_result", "tool_use_id": o.action_id,
                                 "content": o.error, "is_error": True})
+            elif o.text is not None:
+                # bash result — plain text back to the model
+                results.append({"type": "tool_result", "tool_use_id": o.action_id,
+                                "content": o.text})
             else:
                 results.append({"type": "tool_result", "tool_use_id": o.action_id, "content": [
                     {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": o.image_b64}}]})

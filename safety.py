@@ -56,8 +56,8 @@ class Safety:
 
     def allow(self, action: dict) -> bool:
         a = action.get("action", "?")
-        # screenshot is always safe (read-only); everything else is scope-locked
-        if a != "screenshot" and not self._in_scope():
+        # screenshot + bash are always allowed past scope-lock (read-only / local commands)
+        if a not in ("screenshot", "bash") and not self._in_scope():
             self.log_fn(f"  [BLOCKED] foreground app/window is not '{self.allowed_window}' — refusing {a}")
             self.record(action, "blocked-out-of-scope")
             return False

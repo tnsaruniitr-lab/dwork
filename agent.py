@@ -12,6 +12,7 @@ The brain only PROPOSES actions; safety.py decides and executor.py acts.
 """
 import os
 import platform
+import subprocess
 import sys
 
 from dotenv import load_dotenv, dotenv_values
@@ -55,15 +56,24 @@ def build_system_prompt(allowed_window: str) -> str:
              "can be slightly compressed and updates may lag, so after each action wait for the "
              "screenshot to refresh and verify before continuing.\n" if (host_mac and not target_mac) else "")
     return (
-        f"You control a {os_name} desktop through the `computer` tool. The user gives you a goal; "
-        "accomplish it by taking screenshots and issuing mouse/keyboard actions.\n"
-        "- Start by taking a screenshot to see the current screen.\n"
-        "- After EACH action a fresh screenshot is returned. Verify the result before the next "
-        "step; if a click missed or the screen isn't what you expected, correct it.\n"
+        f"You control a {os_name} desktop. You have TWO tools: `computer` (vision/clicks) and `bash` (shell commands).\n"
+        "\n"
+        "TOOL SELECTION — critical for speed and accuracy:\n"
+        "- ALWAYS try `bash` first when you know the file path, folder name, or app name.\n"
+        "  Examples: bash('open \"/Users/x/Desktop/Amend\"') to open a folder,\n"
+        "            bash('open -a Preview \"/path/file.png\"') to open a file,\n"
+        "            bash('ls \"/Users/x/Desktop/Amend\"') to list contents,\n"
+        "            bash('cat \"/path/file.txt\"') to read a text file.\n"
+        "- Use `computer` (screenshot + click) ONLY when the target is inside an app UI\n"
+        "  and cannot be addressed by path — e.g. clicking a button inside nCara.\n"
+        "- NEVER use Finder/Spotlight to navigate to something you can open directly with bash.\n"
+        "\n"
+        "- There may be a browser window open at localhost:5050 showing this agent's control panel — "
+        "IGNORE IT COMPLETELY. Do not click it, do not interact with it.\n"
         + keys + relay +
+        "- After each computer action a fresh screenshot is returned — verify before the next step.\n"
         f"- Work ONLY inside the target app (window/app title contains '{allowed_window}'). "
-        "Do not click into other apps, and never use destructive controls (delete, close-without-save).\n"
-        "- Be precise with click coordinates.\n"
+        "Never use destructive controls (delete, close-without-save).\n"
         "- When the goal is complete, STOP calling tools and reply with a short confirmation. "
         "If you were asked to read text, include the exact text you read."
     )
@@ -106,16 +116,32 @@ def run_session(goal, log=print, confirm_fn=None, stop_fn=None):
         observations = []
         for act in result.actions:
             a = act.input
-            log(f"  step {step + 1}: {a.get('action')} {a.get('coordinate', '')}")
+            action_type = a.get("action")
+            if action_type == "bash":
+                cmd = a.get("command", "")
+                log(f"  step {step + 1}: bash: {cmd}")
+            else:
+                log(f"  step {step + 1}: {action_type} {a.get('coordinate', '')}")
             if stop_fn and stop_fn():
                 log("[stopped by user]"); return
             if not safety.allow(a):
                 observations.append(Observation(act.id, error="Blocked by safety policy."))
                 continue
             try:
-                img_b64, _, _ = ex.run(a)
-                observations.append(Observation(act.id, image_b64=img_b64))
-                safety.record(a, "ok")
+                if action_type == "bash":
+                    cmd = a.get("command", "")
+                    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+                    output = proc.stdout
+                    if proc.returncode != 0 and proc.stderr:
+                        output += "\n[stderr] " + proc.stderr
+                    output = output.strip() or "(no output)"
+                    log(f"    bash result: {output[:200]}")
+                    observations.append(Observation(act.id, text=output))
+                    safety.record(a, "ok")
+                else:
+                    img_b64, _, _ = ex.run(a)
+                    observations.append(Observation(act.id, image_b64=img_b64))
+                    safety.record(a, "ok")
             except Exception as e:
                 log(f"    action error: {e}")
                 observations.append(Observation(act.id, error=f"action error: {e}"))
