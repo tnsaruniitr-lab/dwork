@@ -56,16 +56,12 @@ class ClaudeBackend:
         if enable_zoom:
             self.computer_tool["enable_zoom"] = True
         # bash tool — lets the agent run local shell commands instead of navigating by vision.
-        # Use for: open /path, ls, cat, open -a App — anything addressable directly.
         self.bash_tool = {
             "name": "bash",
             "description": (
                 "Run a shell command on the local machine (macOS). "
                 "PREFER this over clicking/vision whenever you know the path or app name. "
-                "Examples: open '/Users/x/Desktop/Amend' to open a folder in Finder; "
-                "open -a Preview '/path/to/file.png' to open a file; "
-                "ls '/Users/x/Desktop/Amend' to list folder contents; "
-                "cat '/path/file.txt' to read a text file. "
+                "Use Python one-liners (python3 -c) to handle filenames with spaces/special chars. "
                 "Return value is stdout+stderr."
             ),
             "input_schema": {
@@ -74,6 +70,24 @@ class ClaudeBackend:
                     "command": {"type": "string", "description": "Shell command to run"}
                 },
                 "required": ["command"]
+            }
+        }
+        # open_image tool — reads an image file from disk and returns it as pixels.
+        # Eliminates the need to open Preview + screenshot + zoom just to read an image.
+        self.open_image_tool = {
+            "name": "open_image",
+            "description": (
+                "Read an image file from disk and view its contents directly — no Preview needed. "
+                "Use this INSTEAD of opening the file in Preview whenever you need to read "
+                "the contents of a .png, .jpg, .jpeg, .gif, .bmp or .webp file. "
+                "Returns the image for you to read directly."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the image file"}
+                },
+                "required": ["path"]
             }
         }
         # cache_control on the system block caches tools + system together (tools render first).
@@ -85,7 +99,7 @@ class ClaudeBackend:
 
     def step(self):
         kwargs = dict(model=self.model, max_tokens=8192, system=self.system,
-                      tools=[self.computer_tool, self.bash_tool],
+                      tools=[self.computer_tool, self.bash_tool, self.open_image_tool],
                       betas=[self.BETA], messages=self.messages)
         if self.thinking == "adaptive":
             kwargs["thinking"] = {"type": "adaptive"}
@@ -97,8 +111,9 @@ class ClaudeBackend:
             if b.type != "tool_use":
                 continue
             if b.name == "bash":
-                # wrap bash call in executor schema so agent.py can route it
                 actions.append(Action(id=b.id, input={"action": "bash", "command": b.input.get("command", "")}))
+            elif b.name == "open_image":
+                actions.append(Action(id=b.id, input={"action": "open_image", "path": b.input.get("path", "")}))
             else:
                 actions.append(Action(id=b.id, input=b.input))
         u = resp.usage

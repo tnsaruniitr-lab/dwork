@@ -56,26 +56,33 @@ def build_system_prompt(allowed_window: str) -> str:
              "can be slightly compressed and updates may lag, so after each action wait for the "
              "screenshot to refresh and verify before continuing.\n" if (host_mac and not target_mac) else "")
     return (
-        f"You control a {os_name} desktop. You have TWO tools: `computer` (vision/clicks) and `bash` (shell commands).\n"
+        f"You control a {os_name} desktop. You have THREE tools: `bash`, `open_image`, and `computer`.\n"
         "\n"
-        "TOOL SELECTION — critical for speed and accuracy:\n"
-        "- ALWAYS try `bash` first when you know the file path, folder name, or app name.\n"
-        "  Examples: bash('open \"/Users/x/Desktop/Amend\"') to open a folder,\n"
-        "            bash('open -a Preview \"/path/file.png\"') to open a file,\n"
-        "            bash('ls \"/Users/x/Desktop/Amend\"') to list contents,\n"
-        "            bash('cat \"/path/file.txt\"') to read a text file.\n"
-        "- Use `computer` (screenshot + click) ONLY when the target is inside an app UI\n"
-        "  and cannot be addressed by path — e.g. clicking a button inside nCara.\n"
-        "- NEVER use Finder/Spotlight to navigate to something you can open directly with bash.\n"
+        "TOOL SELECTION — use in this priority order:\n"
         "\n"
-        "- There may be a browser window open at localhost:5050 showing this agent's control panel — "
-        "IGNORE IT COMPLETELY. Do not click it, do not interact with it.\n"
+        "1. `bash` — use whenever you know a path, folder name, or app name.\n"
+        "   - List folder: python3 -c \"import os; print(os.listdir('/Users/x/Desktop'))\"\n"
+        "   - IMPORTANT: filenames can contain leading/trailing spaces. Always use Python\n"
+        "     os.listdir() to get exact names, then address files with the exact repr() string.\n"
+        "   - Open folder in Finder: open '/exact/path/to/folder'\n"
+        "   - Read text file: cat '/exact/path/file.txt'\n"
+        "\n"
+        "2. `open_image` — use whenever you need to READ the contents of an image file.\n"
+        "   - NEVER open an image in Preview and screenshot it — use open_image instead.\n"
+        "   - open_image('/exact/path/image.png') returns the image directly for you to read.\n"
+        "\n"
+        "3. `computer` (screenshot + click) — LAST RESORT. Only use when:\n"
+        "   - The target is a button/field inside a running app UI (e.g. nCara, TeamViewer)\n"
+        "   - The task cannot be done by bash or open_image\n"
+        "   - NEVER use computer to navigate Finder or Spotlight.\n"
+        "\n"
+        "- There may be a browser window open at localhost:5050 — IGNORE IT COMPLETELY.\n"
         + keys + relay +
         "- After each computer action a fresh screenshot is returned — verify before the next step.\n"
         f"- Work ONLY inside the target app (window/app title contains '{allowed_window}'). "
         "Never use destructive controls (delete, close-without-save).\n"
         "- When the goal is complete, STOP calling tools and reply with a short confirmation. "
-        "If you were asked to read text, include the exact text you read."
+        "If you were asked to read text or describe an image, include the full details."
     )
 
 
@@ -118,8 +125,9 @@ def run_session(goal, log=print, confirm_fn=None, stop_fn=None):
             a = act.input
             action_type = a.get("action")
             if action_type == "bash":
-                cmd = a.get("command", "")
-                log(f"  step {step + 1}: bash: {cmd}")
+                log(f"  step {step + 1}: bash: {a.get('command', '')}")
+            elif action_type == "open_image":
+                log(f"  step {step + 1}: open_image: {a.get('path', '')}")
             else:
                 log(f"  step {step + 1}: {action_type} {a.get('coordinate', '')}")
             if stop_fn and stop_fn():
@@ -137,6 +145,21 @@ def run_session(goal, log=print, confirm_fn=None, stop_fn=None):
                     output = output.strip() or "(no output)"
                     log(f"    bash result: {output[:200]}")
                     observations.append(Observation(act.id, text=output))
+                    safety.record(a, "ok")
+                elif action_type == "open_image":
+                    import base64, io
+                    from PIL import Image
+                    path = a.get("path", "")
+                    img = Image.open(path).convert("RGB")
+                    # downscale to max 1280px wide so it fits in context cleanly
+                    max_w = 1280
+                    if img.width > max_w:
+                        img = img.resize((max_w, round(img.height * max_w / img.width)), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    img_b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+                    log(f"    image loaded: {img.width}x{img.height}")
+                    observations.append(Observation(act.id, image_b64=img_b64))
                     safety.record(a, "ok")
                 else:
                     img_b64, _, _ = ex.run(a)
