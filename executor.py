@@ -108,6 +108,17 @@ class Executor:
             time.sleep(self.post_action_delay)
         return self.screenshot()
 
+    def _focus_relay(self):
+        """When driving Windows via TeamViewer, ensure TeamViewer is frontmost before clicking.
+        The browser confirm popup steals focus — this restores it silently."""
+        if not _VIA_RELAY:
+            return
+        import subprocess
+        subprocess.run(
+            ["osascript", "-e", 'tell application "TeamViewer" to activate'],
+            capture_output=True, timeout=3)
+        time.sleep(0.3)   # brief settle so TeamViewer is truly front before pyautogui clicks
+
     def _act(self, a: str, action: dict):
         coord = action.get("coordinate")
         text = action.get("text")
@@ -118,6 +129,7 @@ class Executor:
             pyautogui.moveTo(*self._to_real(coord))
 
         elif a in ("left_click", "right_click", "middle_click", "double_click", "triple_click"):
+            self._focus_relay()   # restore TeamViewer focus lost to confirm popup
             if coord:
                 pyautogui.moveTo(*self._to_real(coord))
             button = "right" if a == "right_click" else "middle" if a == "middle_click" else "left"
