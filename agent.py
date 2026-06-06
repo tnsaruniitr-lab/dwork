@@ -73,34 +73,35 @@ def make_backend(system_prompt, ex):
     raise SystemExit(f"unknown CU_BACKEND={CU_BACKEND!r} (use 'claude' or 'uitars')")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print('Usage: python agent.py "your goal here"')
-        sys.exit(1)
-    goal = sys.argv[1]
-
+def run_session(goal, log=print, confirm_fn=None, stop_fn=None):
+    """Run one agent session. Shared by the CLI and the GUI.
+    log(msg): emit a line. confirm_fn(action)->bool: used in 'confirm' mode (else stdin).
+    stop_fn()->bool: checked between steps to abort early."""
     ex = Executor(max_width=MAX_WIDTH)
-    safety = Safety(mode=MODE, allowed_window=ALLOWED_WINDOW)
+    safety = Safety(mode=MODE, allowed_window=ALLOWED_WINDOW, log_fn=log, confirm_fn=confirm_fn)
     backend = make_backend(build_system_prompt(ALLOWED_WINDOW), ex)
 
-    print(f"backend={CU_BACKEND}  model={MODEL if CU_BACKEND == 'claude' else os.getenv('UITARS_MODEL')}  "
-          f"target={TARGET_OS}  mode={MODE}  scope='{ALLOWED_WINDOW}'  zoom={ENABLE_ZOOM}  "
-          f"display={ex.display_w}x{ex.display_h} (real {ex.real_w}x{ex.real_h})")
-    print(f"goal: {goal}\n(kill-switch: slam the mouse into a screen corner to abort)\n")
+    log(f"backend={CU_BACKEND}  model={MODEL if CU_BACKEND == 'claude' else os.getenv('UITARS_MODEL')}  "
+        f"target={TARGET_OS}  mode={MODE}  scope='{ALLOWED_WINDOW}'  zoom={ENABLE_ZOOM}  "
+        f"display={ex.display_w}x{ex.display_h} (real {ex.real_w}x{ex.real_h})")
+    log(f"goal: {goal}")
 
     backend.start(goal)
     for step in range(MAX_STEPS):
+        if stop_fn and stop_fn():
+            log("[stopped by user]"); return
         result = backend.step()
         if result.text:
-            print(f"agent: {result.text}")
+            log(f"agent: {result.text}")
         if not result.actions:
-            print(f"\n[done] {result.usage}")
-            break
+            log(f"[done] {result.usage}"); return
 
         observations = []
         for act in result.actions:
             a = act.input
-            print(f"  step {step + 1}: {a.get('action')} {a.get('coordinate', '')}")
+            log(f"  step {step + 1}: {a.get('action')} {a.get('coordinate', '')}")
+            if stop_fn and stop_fn():
+                log("[stopped by user]"); return
             if not safety.allow(a):
                 observations.append(Observation(act.id, error="Blocked by safety policy."))
                 continue
@@ -109,13 +110,20 @@ def main():
                 observations.append(Observation(act.id, image_b64=img_b64))
                 safety.record(a, "ok")
             except Exception as e:
-                print(f"    action error: {e}")
+                log(f"    action error: {e}")
                 observations.append(Observation(act.id, error=f"action error: {e}"))
                 safety.record(a, f"error:{e}")
 
         backend.observe(observations)
-    else:
-        print(f"\n[stopped] hit CU_MAX_STEPS={MAX_STEPS} without finishing.")
+    log(f"[stopped] hit CU_MAX_STEPS={MAX_STEPS} without finishing.")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print('Usage: python agent.py "your goal here"   (or the GUI:  python app_gui.py)')
+        sys.exit(1)
+    print("(kill-switch: slam the mouse into a screen corner to abort)\n")
+    run_session(sys.argv[1])   # CLI: log=print, confirm via stdin
 
 
 if __name__ == "__main__":

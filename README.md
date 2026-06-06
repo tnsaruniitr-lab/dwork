@@ -29,7 +29,16 @@ copy .env.example .env
 ```
 Edit `.env`: set `ANTHROPIC_API_KEY`, keep `CU_MODE=confirm` and `CU_ALLOWED_WINDOW=Notepad` for the first run.
 
-## Run the Notepad test
+## GUI — type a prompt, watch it run
+```bash
+python3 app_gui.py
+```
+A window with a prompt box, a **Mode** selector (dryrun / confirm / auto), **Run** / **Stop**, and a
+live log pane. Type an instruction → Run. In `confirm` mode a Yes/No dialog pops before each action;
+mouse-to-a-screen-corner is the hard kill-switch. Model / scope / target / key all come from `.env`
+(same config as the CLI). Tkinter ships with standard Python — nothing extra to install.
+
+## Run the Notepad test (CLI)
 1. Put a `notes.txt` with a couple of sentences on the Desktop and **open it in Notepad**.
 2. With Notepad focused:
    ```bat

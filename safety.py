@@ -40,9 +40,12 @@ def foreground_window_title() -> str:
 
 
 class Safety:
-    def __init__(self, mode: str = "confirm", allowed_window: str = "", log_path: str = "logs/actions.jsonl"):
+    def __init__(self, mode: str = "confirm", allowed_window: str = "", log_path: str = "logs/actions.jsonl",
+                 log_fn=print, confirm_fn=None):
         self.mode = (mode or "confirm").lower()
         self.allowed_window = (allowed_window or "").lower()
+        self.log_fn = log_fn              # how to emit a line (print, or a GUI append)
+        self.confirm_fn = confirm_fn      # confirm(action)->bool for 'confirm' mode (else stdin)
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         self._log = open(log_path, "a", encoding="utf-8")
 
@@ -55,16 +58,17 @@ class Safety:
         a = action.get("action", "?")
         # screenshot is always safe (read-only); everything else is scope-locked
         if a != "screenshot" and not self._in_scope():
-            print(f"  [BLOCKED] foreground window is not '{self.allowed_window}' — refusing {a}")
+            self.log_fn(f"  [BLOCKED] foreground app/window is not '{self.allowed_window}' — refusing {a}")
             self.record(action, "blocked-out-of-scope")
             return False
         if self.mode == "dryrun":
-            print(f"  [DRYRUN] would run: {action}")
+            self.log_fn(f"  [DRYRUN] would run: {action}")
             self.record(action, "dryrun")
             return False
         if self.mode == "confirm":
-            ans = input(f"  run {action} ? [y/N] ").strip().lower()
-            if ans != "y":
+            ok = self.confirm_fn(action) if self.confirm_fn else (
+                input(f"  run {action} ? [y/N] ").strip().lower() == "y")
+            if not ok:
                 self.record(action, "declined")
                 return False
         return True
